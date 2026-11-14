@@ -35,4 +35,3 @@ target/
 .env
 *.class
 # Project exclude paths
-/src/main/resources/static/css/
