@@ -1,28 +1,30 @@
 /* =====================================================================
  * SARE INEP — Acessibilidade para daltonismo
  * =====================================================================
- * Este arquivo adiciona à página um painel de acessibilidade com dois
- * recursos:
+ * Adiciona à página um botão "Modo daltônico" (canto inferior esquerdo).
+ * A pessoa liga o modo e escolhe o seu tipo de daltonismo. Então:
  *
- * 1) MODO DALTÔNICO
- *    Troca o verde/vermelho do gráfico por uma paleta segura para
- *    daltônicos (Okabe-Ito: azul e laranja) e aplica TEXTURAS nas barras
- *    usando a biblioteca Patternomaly. Assim a informação não depende só
- *    da cor (WCAG 2.2, critério 1.4.1 "Uso de cor").
+ * 1) A PÁGINA INTEIRA tem as cores ajustadas para aquele tipo
+ *    ("daltonização"). As diferenças de cor que a pessoa não percebe
+ *    (ex.: vermelho x verde) são deslocadas para tons que ela percebe.
  *
- * 2) SIMULADOR DE DALTONISMO
- *    Mostra a página como uma pessoa daltônica enxerga, com filtros de cor
- *    baseados no modelo de Machado, Oliveira e Fernandes (2009).
- *    Serve para demonstrar o problema e testar a solução.
+ * 2) O GRÁFICO troca o verde/vermelho por uma paleta segura
+ *    (Okabe-Ito: azul e laranja) e ganha TEXTURAS nas barras, com a
+ *    biblioteca Patternomaly. Assim a informação não depende só da cor
+ *    (WCAG 2.2, critério 1.4.1 "Uso de cor").
  *
  * Bibliotecas usadas (carregadas no index.html):
  *    - Chart.js ...... desenha o gráfico (já fazia parte do projeto)
  *    - Patternomaly .. cria as texturas — github.com/ashiguruma/patternomaly
  *
+ * Base científica da correção:
+ *    - Simulação de cada tipo: Machado, Oliveira e Fernandes (2009)
+ *    - Daltonização: Fidaner, Lin e Ozguven (2005), com uma melhoria nossa:
+ *      o brilho de cada cor é preservado, para o contraste dos textos não piorar
+ *
  * O arquivo também deixa uma pequena API disponível no navegador:
- *    Daltonismo.ativarModo(true)        // ou false
- *    Daltonismo.simular('deuteranopia') // ou 'protanopia', 'tritanopia',
- *                                       //    'acromatopsia', 'normal'
+ *    Daltonismo.ativarModo(true)              // liga (ou false para desligar)
+ *    Daltonismo.escolherTipo('protanopia')    // ou 'deuteranopia', 'tritanopia'
  * ===================================================================== */
 (function () {
     'use strict';
@@ -39,55 +41,115 @@
     // (1ª série: pontos, 2ª série: listras diagonais, ...).
     const TEXTURAS = ['dot', 'diagonal', 'cross', 'dash', 'zigzag', 'line-vertical'];
 
-    // Matrizes de simulação (Machado et al., 2009, severidade máxima).
-    // Cada matriz recalcula o vermelho, o verde e o azul de cada pixel
-    // do jeito que uma pessoa com aquele tipo de daltonismo percebe.
-    const SIMULACOES = {
-        normal: {
-            nome: 'Visão normal',
-            descricao: 'Sem simulação',
-            matriz: null
-        },
+    // Tipos de daltonismo.
+    // - "simulacao": matriz de Machado et al. (2009), que descreve como
+    //   aquele tipo de olho percebe as cores.
+    // - "ajuste": para onde vai a informação de cor que a pessoa não enxerga.
+    //   Valores escolhidos para deixar as cores do SARE (azul, verde, vermelho,
+    //   laranja e azul-escuro) o mais diferentes possível entre si para aquele tipo.
+    const TIPOS = {
         protanopia: {
             nome: 'Protanopia',
             descricao: 'Dificuldade com o vermelho',
-            matriz: [0.152286, 1.052583, -0.204868,
-                     0.114503, 0.786281, 0.099216,
-                    -0.003882, -0.048116, 1.051998]
+            simulacao: [[0.152286, 1.052583, -0.204868],
+                [0.114503, 0.786281, 0.099216],
+                [-0.003882, -0.048116, 1.051998]],
+            ajuste: [[0, 0, 0],
+                [-0.7, 0.7, 1.0],
+                [-0.7, 1.0, -0.7]]
         },
         deuteranopia: {
             nome: 'Deuteranopia',
             descricao: 'Dificuldade com o verde',
-            matriz: [0.367322, 0.860646, -0.227968,
-                     0.280085, 0.672501, 0.047413,
-                    -0.011820, 0.042940, 0.968881]
+            simulacao: [[0.367322, 0.860646, -0.227968],
+                [0.280085, 0.672501, 0.047413],
+                [-0.011820, 0.042940, 0.968881]],
+            ajuste: [[0, 0, 0],
+                [-0.7, 0.35, 0.35],
+                [0.7, 1.0, 1.0]]
         },
         tritanopia: {
             nome: 'Tritanopia',
             descricao: 'Dificuldade com o azul',
-            matriz: [1.255528, -0.076749, -0.178779,
-                    -0.078411, 0.930809, 0.147602,
-                     0.004733, 0.691367, 0.303900]
-        },
-        acromatopsia: {
-            nome: 'Acromatopsia',
-            descricao: 'Não enxerga cores',
-            matriz: [0.2126, 0.7152, 0.0722,
-                     0.2126, 0.7152, 0.0722,
-                     0.2126, 0.7152, 0.0722]
+            simulacao: [[1.255528, -0.076749, -0.178779],
+                [-0.078411, 0.930809, 0.147602],
+                [0.004733, 0.691367, 0.303900]],
+            ajuste: [[-0.35, -0.7, 1.0],
+                [-0.7, 1.0, -0.7],
+                [0, 0, 0]]
         }
     };
 
-    // Nome usado para lembrar a escolha do usuário no navegador
-    const CHAVE_PREFERENCIA = 'sare-inep:modo-daltonico';
+    // Peso de cada cor no brilho que o olho percebe (vermelho, verde, azul)
+    const LUMINANCIA = [0.2126, 0.7152, 0.0722];
+    const TIPO_PADRAO = 'deuteranopia';
+
+    // Nomes usados para lembrar as escolhas do usuário no navegador
+    const CHAVE_MODO = 'sare-inep:modo-daltonico';
+    const CHAVE_TIPO = 'sare-inep:tipo-daltonismo';
 
     const estado = {
-        modoDaltonico: lerPreferencia(),
-        simulacao: 'normal'
+        ligado: lerPreferencia(CHAVE_MODO) === 'ligado',
+        tipo: TIPOS[lerPreferencia(CHAVE_TIPO)] ? lerPreferencia(CHAVE_TIPO) : TIPO_PADRAO
     };
 
     // -----------------------------------------------------------------
-    // 2. MODO DALTÔNICO NO GRÁFICO (plugin do Chart.js)
+    // 2. CORREÇÃO DE CORES DA PÁGINA (daltonização)
+    // -----------------------------------------------------------------
+    // Passo 1 (daltonização):
+    //   cor corrigida = cor + AJUSTE × (cor − cor como o daltônico vê)
+    //   Em forma de matriz: D = I + AJUSTE × (I − SIMULAÇÃO)
+    // Passo 2 (melhoria nossa): devolve a cada cor o brilho que ela tinha para o
+    //   daltônico. Assim só o TOM muda, e o contraste dos textos não piora.
+    // O navegador aplica a matriz final na página inteira com um filtro SVG.
+
+    function multiplicar(a, b) {
+        return a.map((linha) => b[0].map((_, j) => linha.reduce((soma, valor, k) => soma + valor * b[k][j], 0)));
+    }
+
+    function matrizDeCorrecao(tipo) {
+        const identidade = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        const { simulacao, ajuste } = TIPOS[tipo];
+
+        // Passo 1: D = I + AJUSTE × (I − SIMULAÇÃO)
+        const corPerdida = identidade.map((linha, i) => linha.map((valor, j) => valor - simulacao[i][j]));
+        const deslocamento = multiplicar(ajuste, corPerdida);
+        const D = identidade.map((linha, i) => linha.map((valor, j) => valor + deslocamento[i][j]));
+
+        // Passo 2: brilho percebido pelo daltônico antes (L×S) e depois (L×S×D) da correção
+        const brilhoAntes = multiplicar([LUMINANCIA], simulacao)[0];
+        const brilhoDepois = multiplicar([brilhoAntes], D)[0];
+        // Soma a diferença igualmente em R, G e B (só clareia/escurece, sem mudar o tom)
+        return D.map((linha) => linha.map((valor, j) => valor + brilhoAntes[j] - brilhoDepois[j]));
+    }
+
+    function criarFiltrosSvg() {
+        let filtros = '';
+
+        for (const tipo of Object.keys(TIPOS)) {
+            const m = matrizDeCorrecao(tipo);
+            // O feColorMatrix usa uma matriz 4x5 (vermelho, verde, azul, transparência)
+            const valores = [
+                m[0][0], m[0][1], m[0][2], 0, 0,
+                m[1][0], m[1][1], m[1][2], 0, 0,
+                m[2][0], m[2][1], m[2][2], 0, 0,
+                0, 0, 0, 1, 0
+            ].map((n) => n.toFixed(6)).join(' ');
+            filtros += `<filter id="a11y-correcao-${tipo}" color-interpolation-filters="linearRGB">` +
+                `<feColorMatrix type="matrix" values="${valores}"/></filter>`;
+        }
+
+        document.getElementById('a11y-raiz').insertAdjacentHTML('beforeend',
+            `<svg class="a11y-svg" aria-hidden="true" focusable="false"><defs>${filtros}</defs></svg>`);
+    }
+
+    function aplicarCorrecaoNaPagina() {
+        // O filtro vai no elemento <html>, então vale para a página inteira
+        document.documentElement.style.filter = estado.ligado ? `url(#a11y-correcao-${estado.tipo})` : '';
+    }
+
+    // -----------------------------------------------------------------
+    // 3. GRÁFICO: PALETA SEGURA + TEXTURAS (plugin do Chart.js)
     // -----------------------------------------------------------------
     // O Chart.js chama este plugin antes de cada atualização do gráfico.
     // Por isso não precisamos mexer no script.js: qualquer gráfico criado
@@ -114,7 +176,7 @@
                     serie._corOriginal = serie.backgroundColor;
                 }
 
-                if (!estado.modoDaltonico) {
+                if (!estado.ligado) {
                     serie.backgroundColor = serie._corOriginal;
                     return;
                 }
@@ -142,32 +204,7 @@
     }
 
     // -----------------------------------------------------------------
-    // 3. SIMULADOR (filtros SVG aplicados à página inteira)
-    // -----------------------------------------------------------------
-
-    function criarFiltrosSvg() {
-        let filtros = '';
-
-        for (const [tipo, simulacao] of Object.entries(SIMULACOES)) {
-            if (!simulacao.matriz) continue;
-            const m = simulacao.matriz;
-            // O feColorMatrix usa uma matriz 4x5 (vermelho, verde, azul, transparência)
-            const valores = [
-                m[0], m[1], m[2], 0, 0,
-                m[3], m[4], m[5], 0, 0,
-                m[6], m[7], m[8], 0, 0,
-                0, 0, 0, 1, 0
-            ].join(' ');
-            filtros += `<filter id="a11y-filtro-${tipo}" color-interpolation-filters="linearRGB">` +
-                       `<feColorMatrix type="matrix" values="${valores}"/></filter>`;
-        }
-
-        document.getElementById('a11y-raiz').insertAdjacentHTML('beforeend',
-            `<svg class="a11y-svg" aria-hidden="true" focusable="false"><defs>${filtros}</defs></svg>`);
-    }
-
-    // -----------------------------------------------------------------
-    // 4. PAINEL DE ACESSIBILIDADE (interface)
+    // 4. PAINEL (interface)
     // -----------------------------------------------------------------
 
     const ESTILOS = `
@@ -183,6 +220,7 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); opacity: 1;
         }
         #a11y-raiz .a11y-abrir:hover { background: #1d4ed8; opacity: 1; }
+        #a11y-raiz .a11y-abrir-estado { font-weight: 400; }
 
         #a11y-raiz .a11y-painel {
             position: fixed; left: 20px; bottom: 80px; z-index: 9999;
@@ -190,7 +228,7 @@
             background: #fff; color: #1f2937; border-radius: 12px; padding: 20px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
         }
-        #a11y-raiz .a11y-painel[hidden], #a11y-raiz .a11y-aviso[hidden] { display: none; }
+        #a11y-raiz .a11y-painel[hidden] { display: none; }
 
         #a11y-raiz .a11y-cabecalho {
             display: flex; justify-content: space-between; align-items: center;
@@ -204,11 +242,11 @@
         }
         #a11y-raiz .a11y-fechar:hover { background: #f3f4f6; opacity: 1; }
 
-        #a11y-raiz .a11y-secao { margin: 0 0 18px; padding: 0; border: none; }
+        #a11y-raiz .a11y-secao { margin: 0 0 16px; padding: 0; border: none; }
         #a11y-raiz legend { padding: 0; margin-bottom: 8px; font-weight: 600; font-size: 0.95rem; color: #374151; }
         #a11y-raiz small { display: block; font-size: 0.82rem; color: #4b5563; font-weight: 400; }
 
-        /* Chave liga/desliga do modo daltônico */
+        /* Chave liga/desliga */
         #a11y-raiz .a11y-chave { display: flex; align-items: center; gap: 12px; cursor: pointer; }
         #a11y-raiz .a11y-chave input { position: absolute; opacity: 0; width: 1px; height: 1px; }
         #a11y-raiz .a11y-trilho {
@@ -222,28 +260,16 @@
         #a11y-raiz .a11y-chave input:checked + .a11y-trilho { background: #1d4ed8; }
         #a11y-raiz .a11y-chave input:checked + .a11y-trilho::after { transform: translateX(20px); }
 
-        /* Opções do simulador */
+        /* Escolha do tipo */
         #a11y-raiz .a11y-opcao {
             display: flex; align-items: flex-start; gap: 10px;
             padding: 8px 10px; margin-bottom: 4px; border-radius: 8px; cursor: pointer;
         }
         #a11y-raiz .a11y-opcao:hover { background: #f3f4f6; }
         #a11y-raiz .a11y-opcao input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: #1d4ed8; }
-        #a11y-raiz .a11y-nota { margin: 8px 0 0; font-size: 0.8rem; color: #4b5563; }
-
-        /* Faixa que avisa que a simulação está ligada */
-        #a11y-raiz .a11y-aviso {
-            position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 9999;
-            display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
-            max-width: calc(100vw - 24px); padding: 10px 16px;
-            background: #1e3a8a; color: #fff; border-radius: 999px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25); font-size: 0.95rem;
-        }
-        #a11y-raiz .a11y-aviso button {
-            width: auto; margin: 0; padding: 6px 14px;
-            background: #fff; color: #1e3a8a; border: none; border-radius: 999px;
-            font-size: 0.85rem; font-weight: 600; cursor: pointer; opacity: 1;
-        }
+        #a11y-raiz fieldset:disabled .a11y-opcao { opacity: 0.55; cursor: not-allowed; }
+        #a11y-raiz fieldset:disabled .a11y-opcao:hover { background: transparent; }
+        #a11y-raiz .a11y-nota { margin: 0; font-size: 0.8rem; color: #4b5563; }
 
         /* Contorno de foco bem visível para quem navega pelo teclado */
         #a11y-raiz button:focus-visible,
@@ -251,7 +277,6 @@
         #a11y-raiz .a11y-chave input:focus-visible + .a11y-trilho {
             outline: 3px solid #1d4ed8; outline-offset: 3px;
         }
-        #a11y-raiz .a11y-aviso button:focus-visible { outline-color: #fff; }
 
         /* Texto lido só por leitores de tela */
         #a11y-raiz .a11y-somente-leitor {
@@ -269,44 +294,43 @@
         estilo.textContent = ESTILOS;
         document.head.appendChild(estilo);
 
-        const opcoesSimulador = Object.entries(SIMULACOES).map(([tipo, simulacao]) => `
+        const opcoesTipo = Object.entries(TIPOS).map(([tipo, info]) => `
             <label class="a11y-opcao">
-                <input type="radio" name="a11y-simulacao" value="${tipo}" ${tipo === 'normal' ? 'checked' : ''}>
-                <span><strong>${simulacao.nome}</strong><small>${simulacao.descricao}</small></span>
+                <input type="radio" name="a11y-tipo" value="${tipo}">
+                <span><strong>${info.nome}</strong><small>${info.descricao}</small></span>
             </label>`).join('');
 
         const raiz = document.createElement('div');
         raiz.id = 'a11y-raiz';
         raiz.innerHTML = `
             <button type="button" class="a11y-abrir" aria-expanded="false" aria-controls="a11y-painel">
-                <span aria-hidden="true">👁</span> Acessibilidade
+                <span aria-hidden="true">👁</span>
+                <span>Modo daltônico:</span>
+                <span class="a11y-abrir-estado"></span>
             </button>
 
             <section id="a11y-painel" class="a11y-painel" aria-labelledby="a11y-titulo" hidden>
                 <div class="a11y-cabecalho">
-                    <h2 id="a11y-titulo">Acessibilidade</h2>
-                    <button type="button" class="a11y-fechar" aria-label="Fechar painel de acessibilidade">×</button>
+                    <h2 id="a11y-titulo">Modo daltônico</h2>
+                    <button type="button" class="a11y-fechar" aria-label="Fechar painel do modo daltônico">×</button>
                 </div>
 
                 <div class="a11y-secao">
                     <label class="a11y-chave">
-                        <input type="checkbox" role="switch" id="a11y-modo">
+                        <input type="checkbox" role="switch" id="a11y-ligar">
                         <span class="a11y-trilho" aria-hidden="true"></span>
-                        <span><strong>Modo daltônico</strong><small>Cores seguras e texturas no gráfico</small></span>
+                        <span><strong>Ativar modo daltônico</strong><small>Ajusta as cores do site e do gráfico</small></span>
                     </label>
                 </div>
 
-                <fieldset class="a11y-secao">
-                    <legend>Simular como um daltônico enxerga</legend>
-                    ${opcoesSimulador}
-                    <p class="a11y-nota">A simulação é só para demonstração.</p>
+                <fieldset class="a11y-secao a11y-tipos">
+                    <legend>Qual é o seu tipo de daltonismo?</legend>
+                    ${opcoesTipo}
                 </fieldset>
-            </section>
 
-            <div class="a11y-aviso" hidden>
-                <span>Simulando: <strong class="a11y-aviso-nome"></strong></span>
-                <button type="button" class="a11y-parar">Parar simulação</button>
-            </div>
+                <p class="a11y-nota">As cores da página inteira são ajustadas para o tipo escolhido,
+                    e o gráfico também ganha texturas.</p>
+            </section>
 
             <p class="a11y-somente-leitor" role="status" aria-live="polite"></p>
         `;
@@ -318,7 +342,7 @@
         function abrirOuFecharPainel(abrir) {
             painel.hidden = !abrir;
             botaoAbrir.setAttribute('aria-expanded', String(abrir));
-            if (abrir) raiz.querySelector('#a11y-modo').focus();
+            if (abrir) raiz.querySelector('#a11y-ligar').focus();
         }
 
         botaoAbrir.addEventListener('click', () => abrirOuFecharPainel(painel.hidden));
@@ -336,17 +360,27 @@
             }
         });
 
-        raiz.querySelector('#a11y-modo').addEventListener('change', (evento) => {
+        raiz.querySelector('#a11y-ligar').addEventListener('change', (evento) => {
             ativarModo(evento.target.checked);
         });
 
-        raiz.querySelectorAll('input[name="a11y-simulacao"]').forEach((opcao) => {
-            opcao.addEventListener('change', () => simular(opcao.value));
+        raiz.querySelectorAll('input[name="a11y-tipo"]').forEach((opcao) => {
+            opcao.addEventListener('change', () => escolherTipo(opcao.value));
         });
 
-        raiz.querySelector('.a11y-parar').addEventListener('click', () => simular('normal'));
+        atualizarPainel();
+    }
 
-        raiz.querySelector('#a11y-modo').checked = estado.modoDaltonico;
+    // Deixa o painel e o botão de acordo com o estado atual
+    function atualizarPainel() {
+        const raiz = document.getElementById('a11y-raiz');
+        if (!raiz) return;
+
+        raiz.querySelector('#a11y-ligar').checked = estado.ligado;
+        raiz.querySelector('.a11y-tipos').disabled = !estado.ligado;
+        raiz.querySelector(`input[name="a11y-tipo"][value="${estado.tipo}"]`).checked = true;
+        raiz.querySelector('.a11y-abrir-estado').textContent =
+            estado.ligado ? TIPOS[estado.tipo].nome : 'Desligado';
     }
 
     // Avisa leitores de tela sobre a mudança
@@ -359,55 +393,44 @@
     // 5. AÇÕES (também disponíveis como API: window.Daltonismo)
     // -----------------------------------------------------------------
 
-    function ativarModo(ativo) {
-        estado.modoDaltonico = Boolean(ativo);
-        salvarPreferencia(estado.modoDaltonico);
-
-        const chave = document.getElementById('a11y-modo');
-        if (chave) chave.checked = estado.modoDaltonico;
-
+    function aplicarTudo() {
+        aplicarCorrecaoNaPagina();
         redesenharGraficos();
-        anunciar(estado.modoDaltonico
-            ? 'Modo daltônico ativado. O gráfico agora usa azul e laranja, com texturas.'
-            : 'Modo daltônico desativado. O gráfico voltou às cores originais.');
+        atualizarPainel();
     }
 
-    function simular(tipo) {
-        if (!SIMULACOES[tipo]) tipo = 'normal';
-        estado.simulacao = tipo;
-        const simulacao = SIMULACOES[tipo];
+    function ativarModo(ligado) {
+        estado.ligado = Boolean(ligado);
+        salvarPreferencia(CHAVE_MODO, estado.ligado ? 'ligado' : 'desligado');
+        aplicarTudo();
+        anunciar(estado.ligado
+            ? `Modo daltônico ativado para ${TIPOS[estado.tipo].nome}.`
+            : 'Modo daltônico desativado. As cores voltaram ao original.');
+    }
 
-        // O filtro vai no elemento <html>, então vale para a página inteira
-        document.documentElement.style.filter = simulacao.matriz ? `url(#a11y-filtro-${tipo})` : '';
-
-        const opcao = document.querySelector(`#a11y-raiz input[name="a11y-simulacao"][value="${tipo}"]`);
-        if (opcao) opcao.checked = true;
-
-        const aviso = document.querySelector('#a11y-raiz .a11y-aviso');
-        if (aviso) {
-            aviso.hidden = !simulacao.matriz;
-            aviso.querySelector('.a11y-aviso-nome').textContent =
-                `${simulacao.nome} (${simulacao.descricao.toLowerCase()})`;
-        }
-
-        anunciar(simulacao.matriz ? `Simulando ${simulacao.nome}.` : 'Simulação desligada.');
+    function escolherTipo(tipo) {
+        if (!TIPOS[tipo]) return;
+        estado.tipo = tipo;
+        salvarPreferencia(CHAVE_TIPO, tipo);
+        aplicarTudo();
+        anunciar(`Cores ajustadas para ${TIPOS[tipo].nome}.`);
     }
 
     // -----------------------------------------------------------------
-    // 6. PREFERÊNCIA SALVA NO NAVEGADOR
+    // 6. PREFERÊNCIAS SALVAS NO NAVEGADOR
     // -----------------------------------------------------------------
 
-    function lerPreferencia() {
+    function lerPreferencia(chave) {
         try {
-            return localStorage.getItem(CHAVE_PREFERENCIA) === 'ligado';
+            return localStorage.getItem(chave);
         } catch (erro) {
-            return false; // navegador bloqueou o armazenamento: segue sem lembrar
+            return null; // navegador bloqueou o armazenamento: segue sem lembrar
         }
     }
 
-    function salvarPreferencia(ligado) {
+    function salvarPreferencia(chave, valor) {
         try {
-            localStorage.setItem(CHAVE_PREFERENCIA, ligado ? 'ligado' : 'desligado');
+            localStorage.setItem(chave, valor);
         } catch (erro) {
             // Sem armazenamento disponível: a escolha vale só até recarregar a página
         }
@@ -421,10 +444,10 @@
         registrarPlugin();
         criarPainel();
         criarFiltrosSvg();
-        if (estado.modoDaltonico) redesenharGraficos();
+        aplicarTudo();
     }
 
-    window.Daltonismo = { ativarModo, simular };
+    window.Daltonismo = { ativarModo, escolherTipo };
 
     registrarPlugin(); // registra já, para pegar o gráfico desde a primeira vez
     if (document.readyState === 'loading') {
